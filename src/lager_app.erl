@@ -237,6 +237,9 @@ boot() ->
 
     lager:update_loglevel_config(?DEFAULT_SINK),
 
+    lager:set_unsafe_format_mf(
+        get_env(lager, unsafe_format_mf, ?DEFAULT_UNSAFE_FORMAT_MF)),
+
     SavedHandlers = start_error_logger_handler(
                       get_env(lager, error_logger_redirect, true),
                       interpret_hwm(get_env(lager, error_logger_hwm, 0)),

@@ -34,7 +34,8 @@
         list_all_sinks/0, clear_all_traces/0, stop_trace/1, stop_trace/3, status/0,
         get_loglevel/1, get_loglevel/2, set_loglevel/2, set_loglevel/3, set_loglevel/4, get_loglevels/1,
         update_loglevel_config/1, posix_error/1, set_loghwm/2, set_loghwm/3, set_loghwm/4,
-        safe_format/3, safe_format_chop/3, unsafe_format/2, dispatch_log/5, dispatch_log/7, dispatch_log/9,
+        safe_format/3, safe_format_chop/3, unsafe_format/2, set_unsafe_format_mf/1,
+        dispatch_log/5, dispatch_log/7, dispatch_log/9,
         do_log/9, do_log/10, do_log_unsafe/10, pr/2, pr/3, pr_stacktrace/1, pr_stacktrace/2]).
 
 -type log_level() :: none | debug | info | notice | warning | error | critical | alert | emergency.
@@ -533,10 +534,14 @@ safe_format_chop(Fmt, Args, Limit) ->
 %% supplied a 'FORMAT ERROR' message is printed instead with the
 %% offending arguments. The caller is NOT crashed.
 unsafe_format(Fmt, Args) ->
-    try io_lib:format(Fmt, Args)
+    {M,F} = lager_config:get(unsafe_format_mf),
+    try erlang:apply(M, F, [Fmt, Args])
     catch
         _:_ -> io_lib:format("FORMAT ERROR: ~p ~p", [Fmt, Args])
     end.
+
+set_unsafe_format_mf(MF = {M,F}) when is_atom(M), is_atom(F) ->
+  lager_config:set(unsafe_format_mf, MF).
 
 %% @doc Print a record lager found during parse transform
 pr(Record, Module) when is_tuple(Record), is_atom(element(1, Record)) ->

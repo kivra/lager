@@ -61,6 +61,13 @@ global_set(Key, Value) ->
     set({?GLOBAL, Key}, Value).
 
 
+get(unsafe_format_mf) ->
+    try ets:lookup(?TBL, unsafe_format_mf) of
+        []                       -> ?DEFAULT_UNSAFE_FORMAT_MF;
+        [{unsafe_format_mf, MF}] -> MF
+    catch
+        _:_  -> ?DEFAULT_UNSAFE_FORMAT_MF
+    end;
 get({_Sink, _Key}=FullKey) ->
     get(FullKey, undefined);
 get(Key) ->
@@ -81,6 +88,8 @@ get({Sink, Key}, Default) ->
 get(Key, Default) ->
     get({?DEFAULT_SINK, Key}, Default).
 
+set(unsafe_format_mf, MF = {M,F}) when is_atom(M), is_atom(F) ->
+    ets:insert(?TBL, {unsafe_format_mf, MF});
 set({Sink, Key}, Value) ->
     ets:insert(?TBL, {{Sink, Key}, Value});
 set(Key, Value) ->

@@ -123,3 +123,5 @@
                  }).
 
 -type lager_shaper() :: #lager_shaper{}.
+
+-define(DEFAULT_UNSAFE_FORMAT_MF, {io_lib, format}).
