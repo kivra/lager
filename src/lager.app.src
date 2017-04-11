@@ -8,7 +8,8 @@
   {applications, [
                   kernel,
                   stdlib,
-                  goldrush
+                  goldrush,
+                  kivra_lib
                  ]},
   {registered, [lager_sup, lager_event, lager_crash_log, lager_handler_watcher_sup]},
   {mod, {lager_app, []}},
