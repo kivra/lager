@@ -512,7 +512,7 @@ safe_format(Fmt, Args, Limit) ->
     safe_format(Fmt, Args, Limit, []).
 
 safe_format(Fmt, Args, Limit, _Options) ->
-    try kivra_io:format(Fmt, Args)
+    try s2_io:format(Fmt, Args)
     catch
         _:_ -> lager_trunc_io:format("FORMAT ERROR: ~p ~p", [Fmt, Args], Limit)
     end.

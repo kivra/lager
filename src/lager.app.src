@@ -9,7 +9,7 @@
                   kernel,
                   stdlib,
                   goldrush,
-                  kivra_lib
+                  stdlib2
                  ]},
   {registered, [lager_sup, lager_event, lager_crash_log, lager_handler_watcher_sup]},
   {mod, {lager_app, []}},
