@@ -20,6 +20,51 @@
 -define(DEFAULT_SINK, lager_event).
 -define(ERROR_LOGGER_SINK, error_logger_lager_event).
 
+-define(METADATA(Extras), [{severity, info},
+                           {pid, self()},
+                           {node, node()},
+                           {module, ?MODULE},
+                           {function, ?FUNCTION_NAME},
+                           {function_arity, ?FUNCTION_ARITY},
+                           {file, ?FILE},
+                           {line, ?LINE} | Extras]).
+
+-define(lager_log(Severity, Format, Args, Safety),
+        ?lager_log(?DEFAULT_SINK, Severity, ?METADATA(lager:md()), Format, Args,
+                   ?DEFAULT_TRUNCATION, Safety)).
+-define(lager_log(Severity, Metadata, Format, Args, Safety),
+        ?lager_log(?DEFAULT_SINK, Severity, ?METADATA(Metadata++lager:md()), Format, Args,
+                   ?DEFAULT_TRUNCATION, Safety)).
+
+-define(lager_log(Sink, Severity, Metadata, Format, Args, Size, Safety),
+        _ = lager:dispatch_log(Sink, Severity, Metadata, Format, Args, Size, Safety)).
+
+-define(lager_debug(Format, Args), ?lager_log(debug, Format, Args, safe)).
+-define(lager_debug(Metadata, Format, Args), ?lager_log(debug, Metadata, Format, Args, safe)).
+
+-define(lager_info(Format, Args), ?lager_log(info, Format, Args, safe)).
+-define(lager_info(Metadata, Format, Args), ?lager_log(info, Metadata, Format, Args, safe)).
+
+-define(lager_notice(Format, Args), ?lager_log(notice, Format, Args, safe)).
+-define(lager_notice(Metadata, Format, Args), ?lager_log(notice, Metadata, Format, Args, safe)).
+
+-define(lager_warning(Format, Args), ?lager_log(warning, Format, Args, safe)).
+-define(lager_warning(Metadata, Format, Args), ?lager_log(warning, Metadata, Format, Args, safe)).
+
+-define(lager_error(Format, Args), ?lager_log(error, Format, Args, safe)).
+-define(lager_error(Metadata, Format, Args), ?lager_log(error, Metadata, Format, Args, safe)).
+
+-define(lager_critical(Format, Args), ?lager_log(critical, Format, Args, safe)).
+-define(lager_critical(Metadata, Format, Args), ?lager_log(critical, Metadata, Format, Args, safe)).
+
+-define(lager_alert(Format, Args), ?lager_log(alert, Format, Args, safe)).
+-define(lager_alert(Metadata, Format, Args), ?lager_log(alert, Metadata, Format, Args, safe)).
+
+-define(lager_emergency(Format, Args), ?lager_log(emergency, Format, Args, safe)).
+-define(lager_emergency(Metadata, Format, Args), ?lager_log(emergency, Metadata, Format, Args, safe)).
+
+-define(lager_none(Format, Args), ?lager_log(none, Format, Args, safe)).
+-define(lager_none(Metadata, Format, Args), ?lager_log(none, Metadata, Format, Args, safe)).
 
 -define(LEVELS,
     [debug, info, notice, warning, error, critical, alert, emergency, none]).
@@ -112,6 +157,7 @@
 -endif.
 
 -record(lager_shaper, {
+                  id :: any(),
                   %% how many messages per second we try to deliver
                   hwm = undefined :: 'undefined' | pos_integer(),
                   %% how many messages we've received this second
@@ -119,7 +165,14 @@
                   %% the current second
                   lasttime = os:timestamp() :: erlang:timestamp(),
                   %% count of dropped messages this second
-                  dropped = 0 :: non_neg_integer()
+                  dropped = 0 :: non_neg_integer(),
+                  %% If true, flush notify messages from msg queue at overload
+                  flush_queue = true :: boolean(),
+                  flush_threshold = 0 :: integer(),
+                  %% timer
+                  timer = make_ref() :: reference(),
+                  %% optional filter fun to avoid counting suppressed messages against HWM totals
+                  filter = fun(_) -> false end :: fun()
                  }).
 
 -type lager_shaper() :: #lager_shaper{}.

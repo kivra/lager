@@ -1,4 +1,5 @@
 .eunit
+.rebar
 *.beam
 ebin
 doc
@@ -10,3 +11,6 @@ deps
 .local_dialyzer_plt
 dialyzer_unhandled_warnings
 dialyzer_warnings
+_build/
+rebar.lock
+*.crashdump

@@ -3,7 +3,7 @@
 {application, lager,
  [
   {description, "Erlang logging framework"},
-  {vsn, "3.4.0"},
+  {vsn, "3.7.0"},
   {modules, []},
   {applications, [
                   kernel,
@@ -44,6 +44,8 @@
             %% Number of rotated crash logs to keep, 0 means keep only the
             %% current one - default is 0
             {crash_log_count, 5},
+            %% Crash Log Rotator Module - default is lager_rotator_default
+            {crash_log_rotator, lager_rotator_default},
             %% Whether to redirect error_logger messages into the default lager_event sink - defaults to true
             {error_logger_redirect, true},
             %% How many messages per second to allow from error_logger before we start dropping them
@@ -57,5 +59,7 @@
             %% async_threshold_window. This value only applies to the
             %% default sink; extra sinks can supply their own.
             {async_threshold_window, 5}
-        ]}
+        ]},
+  {licenses, ["Apache 2"]},
+  {links, [{"Github", "https://github.com/erlang-lager/lager"}]}
  ]}.

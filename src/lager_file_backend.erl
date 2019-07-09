@@ -53,6 +53,7 @@
 -define(DEFAULT_ROTATION_SIZE, 10485760). %% 10mb
 -define(DEFAULT_ROTATION_DATE, "$D0"). %% midnight
 -define(DEFAULT_ROTATION_COUNT, 5).
+-define(DEFAULT_ROTATION_MOD, lager_rotator_default).
 -define(DEFAULT_SYNC_LEVEL, error).
 -define(DEFAULT_SYNC_INTERVAL, 1000).
 -define(DEFAULT_SYNC_SIZE, 1024*64). %% 64kb
@@ -67,6 +68,7 @@
         size = 0 :: integer(),
         date :: undefined | string(),
         count = 10 :: integer(),
+        rotator = lager_util :: atom(),
         shaper :: lager_shaper(),
         formatter :: atom(),
         formatter_config :: any(),
@@ -79,7 +81,10 @@
 
 -type option() :: {file, string()} | {level, lager:log_level()} |
                   {size, non_neg_integer()} | {date, string()} |
-                  {count, non_neg_integer()} | {high_water_mark, non_neg_integer()} |
+                  {count, non_neg_integer()} | {rotator, atom()} |
+                  {high_water_mark, non_neg_integer()} |
+                  {flush_queue, boolean()} |
+                  {flush_threshold, non_neg_integer()} |
                   {sync_interval, non_neg_integer()} |
                   {sync_size, non_neg_integer()} | {sync_on, lager:log_level()} |
                   {check_interval, non_neg_integer()} | {formatter, atom()} |
@@ -108,15 +113,16 @@ init(LogFileConfig) when is_list(LogFileConfig) ->
             {error, {fatal, bad_config}};
         Config ->
             %% probabably a better way to do this, but whatever
-            [RelName, Level, Date, Size, Count, HighWaterMark, SyncInterval, SyncSize, SyncOn, CheckInterval, Formatter, FormatterConfig] =
-              [proplists:get_value(Key, Config) || Key <- [file, level, date, size, count, high_water_mark, sync_interval, sync_size, sync_on, check_interval, formatter, formatter_config]],
+            [RelName, Level, Date, Size, Count, Rotator, HighWaterMark, Flush, SyncInterval, SyncSize, SyncOn, CheckInterval, Formatter, FormatterConfig] =
+              [proplists:get_value(Key, Config) || Key <- [file, level, date, size, count, rotator, high_water_mark, flush_queue, sync_interval, sync_size, sync_on, check_interval, formatter, formatter_config]],
+            FlushThr = proplists:get_value(flush_threshold, Config, 0),
             Name = lager_util:expand_path(RelName),
             schedule_rotation(Name, Date),
-            Shaper = #lager_shaper{hwm=HighWaterMark},
-            State0 = #state{name=Name, level=Level, size=Size, date=Date, count=Count, shaper=Shaper, formatter=Formatter,
-                formatter_config=FormatterConfig, sync_on=SyncOn, sync_interval=SyncInterval, sync_size=SyncSize,
-                check_interval=CheckInterval},
-            State = case lager_util:open_logfile(Name, {SyncSize, SyncInterval}) of
+            Shaper = lager_util:maybe_flush(Flush, #lager_shaper{hwm=HighWaterMark, flush_threshold = FlushThr, id=Name}),
+            State0 = #state{name=Name, level=Level, size=Size, date=Date, count=Count, rotator=Rotator,
+                shaper=Shaper, formatter=Formatter, formatter_config=FormatterConfig,
+                sync_on=SyncOn, sync_interval=SyncInterval, sync_size=SyncSize, check_interval=CheckInterval},
+            State = case Rotator:create_logfile(Name, {SyncSize, SyncInterval}) of
                 {ok, {FD, Inode, _}} ->
                     State0#state{fd=FD, inode=Inode};
                 {error, Reason} ->
@@ -173,8 +179,8 @@ handle_event({log, Message},
                     {ok,write(NewState#state{shaper=NewShaper},
                         lager_msg:timestamp(Message), lager_msg:severity_as_int(Message),
                         Formatter:format(Message,FormatConfig))};
-                {false, _, NewShaper} ->
-                    {ok, State#state{shaper=NewShaper}}
+                {false, _, #lager_shaper{dropped=D} = NewShaper} ->
+                    {ok, State#state{shaper=NewShaper#lager_shaper{dropped=D+1}}}
             end;
         false ->
             {ok, State}
@@ -183,11 +189,24 @@ handle_event(_Event, State) ->
     {ok, State}.
 
 %% @private
-handle_info({rotate, File}, #state{name=File,count=Count,date=Date} = State) ->
-    _ = lager_util:rotate_logfile(File, Count),
+handle_info({rotate, File}, #state{name=File,count=Count,date=Date,rotator=Rotator} = State) ->
     State1 = close_file(State),
+    _ = Rotator:rotate_logfile(File, Count),
     schedule_rotation(File, Date),
     {ok, State1};
+handle_info({shaper_expired, Name}, #state{shaper=Shaper, name=Name, formatter=Formatter, formatter_config=FormatConfig} = State) ->
+    _ = case Shaper#lager_shaper.dropped of
+            0 ->
+                ok;
+            Dropped ->
+                Report = io_lib:format(
+                           "lager_file_backend dropped ~p messages in the last second that exceeded the limit of ~p messages/sec",
+                           [Dropped, Shaper#lager_shaper.hwm]),
+                ReportMsg = lager_msg:new(Report, warning, [], []),
+                write(State, lager_msg:timestamp(ReportMsg),
+                      lager_msg:severity_as_int(ReportMsg), Formatter:format(ReportMsg, FormatConfig))
+        end,
+    {ok, State#state{shaper=Shaper#lager_shaper{dropped=0, mps=0, lasttime=os:timestamp()}}};
 handle_info(_Info, State) ->
     {ok, State}.
 
@@ -220,14 +239,14 @@ config_to_id(Config) ->
 
 
 write(#state{name=Name, fd=FD, inode=Inode, flap=Flap, size=RotSize,
-        count=Count} = State, Timestamp, Level, Msg) ->
+        count=Count, rotator=Rotator} = State, Timestamp, Level, Msg) ->
     LastCheck = timer:now_diff(Timestamp, State#state.last_check) div 1000,
     case LastCheck >= State#state.check_interval orelse FD == undefined of
         true ->
             %% need to check for rotation
-            case lager_util:ensure_logfile(Name, FD, Inode, {State#state.sync_size, State#state.sync_interval}) of
+            case Rotator:ensure_logfile(Name, FD, Inode, {State#state.sync_size, State#state.sync_interval}) of
                 {ok, {_, _, Size}} when RotSize /= 0, Size > RotSize ->
-                    case lager_util:rotate_logfile(Name, Count) of
+                    case Rotator:rotate_logfile(Name, Count) of
                         ok ->
                             %% go around the loop again, we'll do another rotation check and hit the next clause of ensure_logfile
                             write(State, Timestamp, Level, Msg);
@@ -300,6 +319,7 @@ validate_logfile_proplist(List) ->
                     lists:keymerge(1, lists:sort(Res), lists:sort([
                             {level, validate_loglevel(?DEFAULT_LOG_LEVEL)}, {date, DefaultRotationDate},
                             {size, ?DEFAULT_ROTATION_SIZE}, {count, ?DEFAULT_ROTATION_COUNT},
+                            {rotator, ?DEFAULT_ROTATION_MOD},
                             {sync_on, validate_loglevel(?DEFAULT_SYNC_LEVEL)}, {sync_interval, ?DEFAULT_SYNC_INTERVAL},
                             {sync_size, ?DEFAULT_SYNC_SIZE}, {check_interval, ?DEFAULT_CHECK_INTERVAL},
                             {formatter, lager_default_formatter}, {formatter_config, []}
@@ -337,6 +357,13 @@ validate_logfile_proplist([{count, Count}|Tail], Acc) ->
             validate_logfile_proplist(Tail, [{count, Count}|Acc]);
         _ ->
             throw({bad_config, "Invalid rotation count", Count})
+    end;
+validate_logfile_proplist([{rotator, Rotator}|Tail], Acc) ->
+    case is_atom(Rotator) of
+        true ->
+            validate_logfile_proplist(Tail, [{rotator, Rotator}|Acc]);
+        false ->
+            throw({bad_config, "Invalid rotation module", Rotator})
     end;
 validate_logfile_proplist([{high_water_mark, HighWaterMark}|Tail], Acc) ->
     case HighWaterMark of
@@ -399,6 +426,20 @@ validate_logfile_proplist([{formatter_config, FmtCfg}|Tail], Acc) ->
         false ->
             throw({bad_config, "Invalid formatter config", FmtCfg})
     end;
+validate_logfile_proplist([{flush_queue, FlushCfg}|Tail], Acc) ->
+    case is_boolean(FlushCfg) of
+        true ->
+            validate_logfile_proplist(Tail, [{flush_queue, FlushCfg}|Acc]);
+        false ->
+            throw({bad_config, "Invalid queue flush flag", FlushCfg})
+    end;
+validate_logfile_proplist([{flush_threshold, Thr}|Tail], Acc) ->
+    case Thr of
+        _ when is_integer(Thr), Thr >= 0 ->
+            validate_logfile_proplist(Tail, [{flush_threshold, Thr}|Acc]);
+        _ ->
+            throw({bad_config, "Invalid queue flush threshold", Thr})
+    end;
 validate_logfile_proplist([Other|_Tail], _Acc) ->
     throw({bad_config, "Invalid option", Other}).
 
@@ -432,24 +473,26 @@ rotation_test_() ->
             SyncLevel = validate_loglevel(?DEFAULT_SYNC_LEVEL),
             SyncSize = ?DEFAULT_SYNC_SIZE,
             SyncInterval = ?DEFAULT_SYNC_INTERVAL,
+            Rotator = ?DEFAULT_ROTATION_MOD,
             CheckInterval = 0, %% hard to test delayed mode
             TestDir = lager_util:create_test_dir(),
             TestLog = filename:join(TestDir, "test.log"),
 
             #state{name=TestLog, level=?DEBUG, sync_on=SyncLevel,
-                sync_size=SyncSize, sync_interval=SyncInterval, check_interval=CheckInterval}
+                sync_size=SyncSize, sync_interval=SyncInterval, check_interval=CheckInterval,
+                rotator=Rotator}
 
         end,
         fun(#state{name=TestLog}) ->
             lager_util:delete_test_dir(filename:dirname(TestLog))
         end, [
-        fun(DefaultState = #state{name=TestLog, sync_size=SyncSize, sync_interval = SyncInterval}) ->
+        fun(DefaultState = #state{name=TestLog, sync_size=SyncSize, sync_interval = SyncInterval, rotator = Rotator}) ->
             {"External rotation should work",
             fun() ->
-                {ok, {FD, Inode, _}} = lager_util:open_logfile(TestLog, {SyncSize, SyncInterval}),
+                {ok, {FD, Inode, _}} = Rotator:open_logfile(TestLog, {SyncSize, SyncInterval}),
                 State0 = DefaultState#state{fd=FD, inode=Inode},
                 ?assertMatch(#state{name=TestLog, level=?DEBUG, fd=FD, inode=Inode},
-                    write(State0, os:timestamp(), ?DEBUG, "hello world")),
+                write(State0, os:timestamp(), ?DEBUG, "hello world")),
                 file:delete(TestLog),
                 Result = write(State0, os:timestamp(), ?DEBUG, "hello world"),
                 %% assert file has changed
@@ -463,7 +506,7 @@ rotation_test_() ->
                 ok
             end}
         end,
-        fun(DefaultState = #state{name=TestLog, sync_size=SyncSize, sync_interval = SyncInterval}) ->
+        fun(DefaultState = #state{name=TestLog, sync_size=SyncSize, sync_interval = SyncInterval, rotator = Rotator}) ->
             {"Internal rotation and delayed write",
             fun() ->
                 TestLog0 = TestLog ++ ".0",
@@ -471,7 +514,7 @@ rotation_test_() ->
                 RotationSize = 15,
                 PreviousCheck = os:timestamp(),
 
-                {ok, {FD, Inode, _}} = lager_util:open_logfile(TestLog, {SyncSize, SyncInterval}),
+                {ok, {FD, Inode, _}} = Rotator:open_logfile(TestLog, {SyncSize, SyncInterval}),
                 State0 = DefaultState#state{
                     fd=FD, inode=Inode, size=RotationSize,
                     check_interval=CheckInterval, last_check=PreviousCheck},
@@ -841,6 +884,7 @@ filesystem_test_() ->
 
             gen_event:add_handler(lager_event, lager_file_backend,
                 [{file, TestLog}, {level, critical}, {check_interval, always}]),
+            timer:sleep(500),
             lager:critical("Test message"),
             {ok, Bin1} = file:read_file(TestLog),
             ?assertMatch([_, _, "[critical]", _, "Test message\n"],
@@ -913,6 +957,23 @@ filesystem_test_() ->
             timer:sleep(10),
             ?assert(filelib:is_regular(TestLog0)),
 
+            lager_util:delete_test_dir(TestDir)
+        end},
+        {"no silent hwm drops",
+        fun() ->
+            TestDir = lager_util:create_test_dir(),
+            TestLog = filename:join(TestDir, "test.log"),
+            gen_event:add_handler(lager_event, lager_file_backend, [{file, TestLog}, {level, info},
+                {high_water_mark, 5}, {flush_queue, false}, {sync_on, "=warning"}]),
+            {_, _, MS} = os:timestamp(),
+            timer:sleep((1000000 - MS) div 1000 + 1),
+            %start close to the beginning of a new second
+            [lager:log(info, self(), "Foo ~p", [K]) || K <- lists:seq(1, 15)],
+            timer:sleep(1000),
+            {ok, Bin} = file:read_file(TestLog),
+            Last = lists:last(re:split(Bin, "\n", [{return, list}, trim])),
+            ?assertMatch([_, _, _, _, "lager_file_backend dropped 10 messages in the last second that exceeded the limit of 5 messages/sec"],
+                re:split(Last, " ", [{return, list}, {parts, 5}])),
             lager_util:delete_test_dir(TestDir)
         end}
     ]}.

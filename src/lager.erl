@@ -31,7 +31,8 @@
         md/0, md/1,
         rotate_handler/1, rotate_handler/2, rotate_sink/1, rotate_all/0,
         trace/2, trace/3, trace_file/2, trace_file/3, trace_file/4, trace_console/1, trace_console/2,
-        list_all_sinks/0, clear_all_traces/0, stop_trace/1, stop_trace/3, status/0,
+        install_trace/2, install_trace/3, remove_trace/1, trace_state/3, trace_func/3,
+        list_all_sinks/0, clear_all_traces/0, clear_trace_by_destination/1, stop_trace/1, stop_trace/3, status/0,
         get_loglevel/1, get_loglevel/2, set_loglevel/2, set_loglevel/3, set_loglevel/4, get_loglevels/1,
         update_loglevel_config/1, posix_error/1, set_loghwm/2, set_loghwm/3, set_loghwm/4,
         safe_format/3, safe_format_chop/3, unsafe_format/2, dispatch_log/5, dispatch_log/7, dispatch_log/9,
@@ -42,7 +43,30 @@
 
 -export_type([log_level/0, log_level_number/0]).
 
+-record(trace_func_state_v1, {
+          pid :: undefined | pid(),
+          level :: log_level(),
+          count :: infinity | pos_integer(),
+          format_string :: string(),
+          timeout :: infinity | pos_integer(),
+          started = os:timestamp() :: erlang:timestamp() %% use os:timestamp for compatability
+         }).
+
 %% API
+
+%% @doc installs a lager trace handler into the target process (using sys:install) at the specified level.
+-spec install_trace(pid(), log_level()) -> ok.
+install_trace(Pid, Level) ->
+    install_trace(Pid, Level, []).
+
+-spec install_trace(pid(), log_level(), [{count, infinity | pos_integer()} | {format_string, string()} | {timeout, timeout()}]) -> ok.
+install_trace(Pid, Level, Options) ->
+    sys:install(Pid, {fun ?MODULE:trace_func/3, trace_state(Pid, Level, Options)}).
+
+%% @doc remove a previously installed lager trace handler from the target process.
+-spec remove_trace(pid()) -> ok.
+remove_trace(Pid) ->
+    sys:remove(Pid, fun ?MODULE:trace_func/3).
 
 %% @doc Start the application. Mainly useful for using `-s lager' as a command
 %% line switch to the VM to make lager start on boot.
@@ -325,6 +349,12 @@ clear_traces_by_sink(Sinks) ->
                   end,
                   Sinks).
 
+clear_trace_by_destination(ID) ->
+    Sinks = lists:sort(list_all_sinks()),
+    Traces = find_traces(Sinks),
+    [ stop_trace_int({Filter, Level, Destination}, Sink) || {Sink, {Filter, Level, Destination}} <- Traces, Destination == ID].
+
+
 clear_all_traces() ->
     Handlers = lager_config:global_get(handlers, []),
     clear_traces_by_sink(list_all_sinks()),
@@ -538,13 +568,15 @@ unsafe_format(Fmt, Args) ->
         _:_ -> io_lib:format("FORMAT ERROR: ~p ~p", [Fmt, Args])
     end.
 
-%% @doc Print a record lager found during parse transform
+%% @doc Print a record or a list of records lager found during parse transform
 pr(Record, Module) when is_tuple(Record), is_atom(element(1, Record)) ->
     pr(Record, Module, []);
+pr(List, Module) when is_list(List) ->
+    pr(List, Module, []);
 pr(Record, _) ->
     Record.
 
-%% @doc Print a record lager found during parse transform
+%% @doc Print a record or a list of records lager found during parse transform
 pr(Record, Module, Options) when is_tuple(Record), is_atom(element(1, Record)), is_list(Options) ->
     try 
         case is_record_known(Record, Module) of
@@ -558,9 +590,14 @@ pr(Record, Module, Options) when is_tuple(Record), is_atom(element(1, Record)), 
         error:undef ->
             Record
     end;
+pr([Head|Tail], Module, Options) when is_list(Options) ->
+    [pr(Head, Module, Options)|pr(Tail, Module, Options)];
 pr(Record, _, _) ->
     Record.
 
+zip([FieldName|RecordFields], [FieldValue|Record], Module, Options, ToReturn) when is_list(FieldValue) ->
+    zip(RecordFields, Record, Module, Options,
+        [{FieldName, pr(FieldValue, Module, Options)}|ToReturn]);
 zip([FieldName|RecordFields], [FieldValue|Record], Module, Options, ToReturn) ->
     Compress = lists:member(compress, Options),
     case   is_tuple(FieldValue) andalso
@@ -597,31 +634,36 @@ is_record_known(Record, Module) ->
 
 %% @doc Print stacktrace in human readable form
 pr_stacktrace(Stacktrace) ->
+    Stacktrace1 = case application:get_env(lager, reverse_pretty_stacktrace, true) of
+                      true ->
+                          lists:reverse(Stacktrace);
+                      _ ->
+                          Stacktrace
+                  end,
+    pr_stacktrace_(Stacktrace1).
+
+pr_stacktrace_(Stacktrace) ->
     Indent = "\n    ",
     lists:foldl(
         fun(Entry, Acc) ->
             Acc ++ Indent ++ error_logger_lager_h:format_mfa(Entry)
         end,
         [],
-        lists:reverse(Stacktrace)).
+        Stacktrace).
 
 pr_stacktrace(Stacktrace, {Class, Reason}) ->
-    lists:flatten(
-        pr_stacktrace(Stacktrace) ++ "\n" ++ io_lib:format("~s:~p", [Class, Reason])).
-    
-
-%% R15 compatibility only
-filtermap(Fun, List1) ->
-    lists:foldr(fun(Elem, Acc) ->
-                       case Fun(Elem) of
-                           false -> Acc;
-                           {true,Value} -> [Value|Acc]
-                       end
-                end, [], List1).
+    case application:get_env(lager, reverse_pretty_stacktrace, true) of
+        true ->
+            lists:flatten(
+              pr_stacktrace_(lists:reverse(Stacktrace)) ++ "\n" ++ io_lib:format("~s:~p", [Class, Reason]));
+        _ ->
+            lists:flatten(
+              io_lib:format("~s:~p", [Class, Reason]) ++ pr_stacktrace_(Stacktrace))
+    end.
 
 rotate_sink(Sink) ->
     Handlers = lager_config:global_get(handlers),
-    RotateHandlers = filtermap(
+    RotateHandlers = lists:filtermap(
         fun({Handler,_,S}) when S == Sink -> {true, {Handler, Sink}};
            (_)                            -> false 
         end, 
@@ -646,3 +688,34 @@ rotate_handler(Handler) ->
 
 rotate_handler(Handler, Sink) ->
     gen_event:call(Sink, Handler, rotate, ?ROTATE_TIMEOUT).
+
+%% @private
+trace_func(#trace_func_state_v1{pid=Pid, level=Level, format_string=Fmt}=FuncState, Event, ProcState) ->
+    _ = lager:log(Level, Pid, Fmt, [Event, ProcState]),
+    check_timeout(decrement_count(FuncState)).
+
+%% @private
+trace_state(Pid, Level, Options) ->
+    #trace_func_state_v1{pid=Pid,
+                         level=Level,
+                         count=proplists:get_value(count, Options, infinity),
+                         timeout=proplists:get_value(timeout, Options, infinity),
+                         format_string=proplists:get_value(format_string, Options, "TRACE ~p ~p")}.
+
+decrement_count(#trace_func_state_v1{count=infinity} = FuncState) ->
+    FuncState;
+decrement_count(#trace_func_state_v1{count=1}) ->
+    %% hit the counter limit
+    done;
+decrement_count(#trace_func_state_v1{count=Count} = FuncState) ->
+    FuncState#trace_func_state_v1{count=Count - 1}.
+
+check_timeout(#trace_func_state_v1{timeout=infinity} = FuncState) ->
+    FuncState;
+check_timeout(#trace_func_state_v1{timeout=Timeout, started=Started} = FuncState) ->
+    case (timer:now_diff(os:timestamp(), Started) / 1000) > Timeout of
+        true ->
+            done;
+        false ->
+            FuncState
+    end.
