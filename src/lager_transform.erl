@@ -198,17 +198,14 @@ do_transform(Line, SinkName, Severity, Arguments0, Safety) ->
                   [{tuple,Line,
                           [{atom,Line,undefined},{atom,Line,undefined},{var,Line,'_'}]}],
                   [],
-                  %% trick the linter into avoiding a 'term constructed but not used' error:
-                  %% (fun() -> {error, lager_not_running} end)()
-                  [{call, Line, {'fun', Line, {clauses, [{clause, Line, [],[], [{tuple, Line, [{atom, Line, error},{atom, Line, lager_not_running}]}]}]}}, []}]
+                  [{tuple, erl_anno:set_generated(true, Line), [{atom, Line, error},{atom, Line, lager_not_running}]}]
           },
           %% {undefined, _, _} -> {error, {sink_not_configured, Sink}};
           {clause,Line,
                   [{tuple,Line,
                           [{atom,Line,undefined},{var,Line,'_'},{var,Line,'_'}]}],
                   [],
-                  %% same trick as above to avoid linter error
-                  [{call, Line, {'fun', Line, {clauses, [{clause, Line, [],[], [{tuple,Line, [{atom,Line,error}, {tuple,Line,[{atom,Line,sink_not_configured},{atom,Line,SinkName}]}]}]}]}}, []}] 
+                  [{tuple, erl_anno:set_generated(true, Line), [{atom,Line,error}, {tuple,Line,[{atom,Line,sink_not_configured},{atom,Line,SinkName}]}]}]
           },
           %% {SinkPid, _, {Level, Traces}} when ... -> lager:do_log/9;
           {clause,Line,
@@ -267,8 +264,8 @@ handle_args(DefaultAttrs, Line, [Arg1, Arg2]) ->
 handle_args(DefaultAttrs, _Line, [Attrs, Format, Args]) ->
     {concat_lists(Attrs, DefaultAttrs), Format, Args}.
 
-make_varname(Prefix, Line) ->
-    list_to_atom(Prefix ++ atom_to_list(get(module)) ++ integer_to_list(Line)).
+make_varname(Prefix, CallAnno) ->
+    list_to_atom(Prefix ++ atom_to_list(get(module)) ++ integer_to_list(erl_anno:line(CallAnno))).
 
 %% concat 2 list ASTs by replacing the terminating [] in A with the contents of B
 concat_lists({var, Line, _Name}=Var, B) ->

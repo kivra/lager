@@ -5,7 +5,8 @@ to provide a more traditional way to perform logging in an erlang application
 that plays nicely with traditional UNIX logging tools like logrotate and
 syslog.
 
-[Travis-CI](http://travis-ci.org/erlang-lager/lager) :: [![Travis-CI](https://travis-ci.org/erlang-lager/lager.svg?branch=master)](http://travis-ci.org/erlang-lager/lager)
+[![Build Status](https://github.com/erlang-lager/lager/workflows/build/badge.svg)](https://github.com/erlang-lager/lager)
+[![Hex pm](https://img.shields.io/hexpm/v/lager)](https://hex.pm/packages/lager)
 
 Features
 --------
@@ -54,8 +55,8 @@ We review PRs and issues at least once a month as described below.
 OTP Support Policy
 ------------------
 The lager maintainers intend to support the past three OTP releases from
-current on the main 3.x branch of the project. As of December 2018 that includes
-21, 20, 19.
+current on the main 3.x branch of the project. As of August 2019 that includes
+22, 21 20
 
 Lager may or may not run on older OTP releases but it will only be guaranteed
 tested on the previous three OTP releases. If you need a version of lager
@@ -258,6 +259,19 @@ call "semi-iolist":
       conditional operator: if a value for the atom placeholder can be
       found, the first semi-iolist will be output; otherwise, the
       second will be used.
+    * A tuple of `{pterm, atom()}` will attempt to lookup
+      the value of the specified atom from the
+      [persistent_term](http://erlang.org/doc/man/persistent_term.html)
+      feature added in OTP 21.2. The default value is `""`. The
+      default value will be used if the key cannot be found or
+      if this formatting term is specified on an OTP release before
+      OTP 21.
+    * A tuple of `{pterm, atom(), semi-iolist()}` will attempt to
+      lookup the value of the specified atom from the persistent_term
+      feature added in OTP 21.2. The default value is the specified
+      semi-iolist(). The default value will be used if the key cannot
+      be found or the if this formatting term is specified on an OTP
+      release before OTP 21.
 
 Examples:
 
@@ -267,6 +281,7 @@ Examples:
 [{pid,"Unknown Pid"}] -> "<?.?.?>" if pid is in the metadata, "Unknown Pid" if not.
 [{pid, ["My pid is ", pid], ["Unknown Pid"]}] -> if pid is in the metadata print "My pid is <?.?.?>", otherwise print "Unknown Pid"
 [{server,{pid, ["(", pid, ")"], ["(Unknown Server)"]}}] -> user provided server metadata, otherwise "(<?.?.?>)", otherwise "(Unknown Server)"
+[{pterm, pterm_key, <<"undefined">>}] -> if a value for 'pterm_key' is found in OTP 21 (or later) persistent_term storage it is used, otherwise "undefined"
 ```
 
 Universal time
@@ -1140,6 +1155,47 @@ Example Usage:
 
 3.x Changelog
 -------------
+3.9.2 - 14 May 2021
+
+   * Bugfix: Prevent "a term is constructed but never used" warnings (#547)
+   * Bugfix: Update CI test matrix to include OTP 24 (#551)
+
+3.9.1 - 2 March 2021
+
+   * Bugfix: More log_root fun (#543)
+   * Bugfix: Use GHA for all the CIs
+
+3.9.0 - 24 February 2021
+
+    * Bugfix: Try to make a log root of "log" more sensible (#540)
+    * Feature: Further adapt to OTP 24 (also remove pre OTP 21 code),
+               adopt Github Actions for tests
+
+3.8.2 - 4 February 2021
+
+    * Bugfix: Make directory expansion return an absolute path (#535)
+    * Feature: Write crash.log under the log_root location (#536)
+    * Bugfix: Handle line numbering correctly in forthcoming OTP 24 release (#537)
+
+3.8.1 - 28 August 2020
+
+    * Feature: Allow metadata fields to be whitelisted in log formatting (#514)
+    * Feature: Enable a persistent_term log formatter (#530) (#531)
+    * Bugfix: Handle gen_statem crashes in newer OTP releases correctly (#523)
+    * Cleanup: Add a hex badge (#525)
+    * Cleanup: Fix Travis CI badge link
+    * Policy: Officially ending support for OTP 20 (Support OTP 21, 22, 23)
+
+3.8.0 - 9 August 2019
+
+    * Breaking API change: Modify the `lager_rotator_behaviour` to pass in a
+      file's creation time to `ensure_logfile/5` to be used to determine if
+      file has changed on systems where inodes are not available (i.e.
+      `win32`). The return value from `create_logfile/2`, `open_logfile/2` and
+      `ensure_logfile/5` now requires ctime to be returned (#509)
+    * Bugfix: ensure log file rotation works on `win32` (#509)
+    * Bugfix: ensure test suite passes on `win32` (#509)
+    * Bugfix: ensure file paths with Unicode are formatted properly (#510)
 
 3.7.0 - 24 May 2019
 

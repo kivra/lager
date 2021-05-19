@@ -23,7 +23,6 @@
 -behaviour(application).
 -include("lager.hrl").
 -ifdef(TEST).
--compile([export_all]).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 -export([start/0,
@@ -42,11 +41,11 @@
 -define(DEFAULT_HANDLER_CONF,
         [{lager_console_backend, [{level, info}]},
          {lager_file_backend,
-          [{file, "log/error.log"}, {level, error},
+          [{file, "error.log"}, {level, error},
            {size, 10485760}, {date, "$D0"}, {count, 5}]
          },
          {lager_file_backend,
-          [{file, "log/console.log"}, {level, info},
+          [{file, "console.log"}, {level, info},
            {size, 10485760}, {date, "$D0"}, {count, 5}]
          }
         ]).
@@ -274,7 +273,8 @@ boot_sink(Sink, false) ->
 stop(Handlers) ->
     lists:foreach(fun(Handler) ->
           error_logger:add_report_handler(Handler)
-      end, Handlers).
+      end, Handlers),
+    lager_config:cleanup().
 
 expand_handlers([]) ->
     [];
